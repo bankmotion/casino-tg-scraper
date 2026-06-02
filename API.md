@@ -88,7 +88,6 @@ Listener pushes one classified promo per call, after pre-filter, OpenAI classifi
 | `channel_id` | string | yes | Telegram channel ID as a string (int64) |
 | `channel_username` | string \| null | yes | `@handle` without the `@`, or `null` for private channels |
 | `channel_title` | string | yes | Display name from the channel info row |
-| `partner_id` | string | yes | Casino partner id (copied from the channel row — saves a join) |
 | `message_id` | int | yes | Telegram message ID; together with `channel_id` it is the idempotency key |
 | `text` | string \| null | yes | Message text; `null` if the message has only media |
 | `media_type` | string \| null | yes | `"photo"`, `"video"`, `"document"`, or `null` |
@@ -96,22 +95,38 @@ Listener pushes one classified promo per call, after pre-filter, OpenAI classifi
 | `media_thumb_url` | string \| null | yes | Cloudinary thumbnail URL (videos only); `null` otherwise |
 | `media_width` | int \| null | no | Pixel width if photo/video, else `null` |
 | `media_height` | int \| null | no | Pixel height if photo/video, else `null` |
-| `posted_at` | string (ISO-8601) | yes | Original post time from Telegram in UTC |
 | `classification` | object | yes | See below |
 | `raw` | object | yes | Full GramJS message object (bigints serialized as strings) |
 
 ### `classification` object
 
+Result of the OpenAI classification + extraction step. All fields are always present; `null` means the model could not extract that field from the message text.
+
+The listener only POSTs messages where `confidence >= 0.5`, so the backend will never see low-confidence (non-promo) records.
+
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `partner_id` | string | channel row | Casino partner id copied from the channel definition. OpenAI does **not** extract this. |
+| `timestamp` | string (ISO-8601) | Telegram | When the message was posted to Telegram (UTC). This is the canonical "promo dropped at" time the website should display. |
+| `confidence` | number | OpenAI | 0..1 certainty that this is a promo. Backend can use it to rank or threshold further. |
+| `code` | string \| null | OpenAI | Promo code, verbatim with case + punctuation preserved. |
+| `summary` | string \| null | OpenAI | Short one-line description of the offer. |
+| `value_usd` | number \| null | OpenAI | USD value of the bonus (e.g. `5` from "$5 value"). Null if not USD or not stated. |
+| `wager_req_usd` | number \| null | OpenAI | USD wagering requirement (e.g. `15000` from "$15,000 wager required"). Null if not USD or not stated. |
+| `claims_count` | int \| null | OpenAI | Number of claims/redemptions stated in the message (casino-reported, not your-site analytics). |
+
 ```json
 {
-  "is_promo": true,
-  "confidence": 0.94,
-  "code": "WELCOME200",
-  "summary": "200% deposit bonus, code WELCOME200"
+  "partner_id": "winna",
+  "timestamp": "2026-06-01T12:34:56Z",
+  "confidence": 0.96,
+  "code": "BL_CKJ_CK-05-m8k2",
+  "summary": "Winna Blackjack bonus code, $5 value",
+  "value_usd": 5,
+  "wager_req_usd": 15000,
+  "claims_count": 200
 }
 ```
-
-`code` and `summary` may be `null` if not extractable.
 
 ### Request example
 
@@ -126,7 +141,6 @@ Content-Type: application/json
   "channel_id": "1402934877",
   "channel_username": "casino_promos",
   "channel_title": "Casino Promos",
-  "partner_id": "stake",
   "message_id": 8721,
   "text": "🎁 Use code WELCOME200 for a 200% bonus on your first deposit!",
   "media_type": "photo",
@@ -134,12 +148,15 @@ Content-Type: application/json
   "media_thumb_url": null,
   "media_width": 1280,
   "media_height": 720,
-  "posted_at": "2026-06-01T12:34:56Z",
   "classification": {
-    "is_promo": true,
+    "partner_id": "stake",
+    "timestamp": "2026-06-01T12:34:56Z",
     "confidence": 0.94,
     "code": "WELCOME200",
-    "summary": "200% deposit bonus, code WELCOME200"
+    "summary": "200% deposit bonus, code WELCOME200",
+    "value_usd": 25,
+    "wager_req_usd": 75000,
+    "claims_count": null
   },
   "raw": { "...": "full message object" }
 }

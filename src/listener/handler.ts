@@ -8,6 +8,9 @@ import { classify } from "./classifier.js";
 import { downloadAndUpload } from "./cloudinary.js";
 import type { ChannelEntity } from "./channels.js";
 
+// Anything below this OpenAI confidence is treated as "not a promo" and dropped.
+const PROMO_CONFIDENCE_THRESHOLD = 0.5;
+
 function mediaTypeOf(message: Api.Message): string | null {
   const media = message.media;
   if (!media) return null;
@@ -61,7 +64,7 @@ export function buildHandler(client: TelegramClient, queue: Queue) {
       return;
     }
 
-    if (!classification.is_promo) {
+    if (classification.confidence < PROMO_CONFIDENCE_THRESHOLD) {
       logger.debug(
         {
           channel: entity.def.username,
@@ -90,7 +93,6 @@ export function buildHandler(client: TelegramClient, queue: Queue) {
       channel_id: entity.telegramId,
       channel_username: entity.def.username,
       channel_title: entity.def.title,
-      partner_id: entity.def.partner_id,
       message_id: msg.id,
       text,
       media_type: mediaType,
@@ -98,8 +100,11 @@ export function buildHandler(client: TelegramClient, queue: Queue) {
       media_thumb_url: mediaUpload?.thumb_url ?? null,
       media_width: mediaUpload?.width ?? null,
       media_height: mediaUpload?.height ?? null,
-      posted_at: new Date(msg.date * 1000).toISOString(),
-      classification,
+      classification: {
+        partner_id: entity.def.partner_id,
+        timestamp: new Date(msg.date * 1000).toISOString(),
+        ...classification,
+      },
       raw: serializeRaw(msg),
     };
 
