@@ -88,6 +88,7 @@ Listener pushes one classified promo per call, after the pre-filter and OpenAI c
 | `channel_id` | string | yes | Telegram channel ID as a string (int64) |
 | `channel_username` | string \| null | yes | `@handle` without the `@`, or `null` for private channels |
 | `channel_title` | string | yes | Display name from the channel info row |
+| `partner_id` | string | yes | Casino partner id copied from the channel row (saves backend a join) |
 | `message_id` | int | yes | Telegram message ID; together with `channel_id` it is the idempotency key |
 | `text` | string \| null | yes | Message text; `null` for media-only messages (which still pass through if pre-filter and classifier find promo cues in the text — but text-only is the normal case) |
 | `classification` | object | yes | See below |
@@ -101,7 +102,6 @@ The listener only POSTs messages where `confidence >= 0.5`, so the backend will 
 
 | Field | Type | Source | Description |
 |---|---|---|---|
-| `partner_id` | string | channel row | Casino partner id copied from the channel definition. OpenAI does **not** extract this. |
 | `timestamp` | string (ISO-8601) | Telegram | When the message was posted to Telegram (UTC). This is the canonical "promo dropped at" time the website should display. |
 | `confidence` | number | OpenAI | 0..1 certainty that this is a promo. Backend can use it to rank or threshold further. |
 | `code` | string \| null | OpenAI | Promo code, verbatim with case + punctuation preserved. |
@@ -112,7 +112,6 @@ The listener only POSTs messages where `confidence >= 0.5`, so the backend will 
 
 ```json
 {
-  "partner_id": "winna",
   "timestamp": "2026-06-01T12:34:56Z",
   "confidence": 0.96,
   "code": "BL_CKJ_CK-05-m8k2",
@@ -136,10 +135,10 @@ Content-Type: application/json
   "channel_id": "1402934877",
   "channel_username": "casino_promos",
   "channel_title": "Casino Promos",
+  "partner_id": "stake",
   "message_id": 8721,
   "text": "🎁 Use code WELCOME200 for a 200% bonus on your first deposit!",
   "classification": {
-    "partner_id": "stake",
     "timestamp": "2026-06-01T12:34:56Z",
     "confidence": 0.94,
     "code": "WELCOME200",
@@ -425,7 +424,7 @@ Field mapping vs API payload:
 | `channel_id` | `channel_id` | API sends as **string** to avoid JS bigint truncation — cast to `BIGINT` on insert |
 | `channel_username` | `channel_username` | Denormalized from `channels` for fast feed reads |
 | `channel_title` | `channel_title` | Denormalized |
-| `partner_id` | `classification.partner_id` | Listener-attached from channel row |
+| `partner_id` | `partner_id` | Top-level field; listener copies it from the channel row |
 | `message_id` | `message_id` | Telegram message ID |
 | `text` | `text` | Raw message text |
 | `posted_at` | `classification.timestamp` | Renamed in the DB because `timestamp` is a reserved word in SQL |
