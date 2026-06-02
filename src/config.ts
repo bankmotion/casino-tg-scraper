@@ -20,12 +20,6 @@ export const config = {
     apiKey: required("OPENAI_API_KEY"),
     model: optional("OPENAI_MODEL", "gpt-4o-mini"),
   },
-  cloudinary: {
-    cloudName: required("CLOUDINARY_CLOUD_NAME"),
-    apiKey: required("CLOUDINARY_API_KEY"),
-    apiSecret: required("CLOUDINARY_API_SECRET"),
-    folder: optional("CLOUDINARY_FOLDER", "promo-listener"),
-  },
   backend: {
     baseUrl: required("BACKEND_BASE_URL").replace(/\/$/, ""),
     apiKey: required("BACKEND_API_KEY"),

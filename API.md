@@ -79,7 +79,7 @@ Either `username` or `invite_link` must be non-null. If both are set, `username`
 
 ## 2. `POST /api/messages`
 
-Listener pushes one classified promo per call, after pre-filter, OpenAI classification, and (if applicable) Cloudinary upload have all succeeded.
+Listener pushes one classified promo per call, after the pre-filter and OpenAI classification have both passed.
 
 ### Request body
 
@@ -89,12 +89,7 @@ Listener pushes one classified promo per call, after pre-filter, OpenAI classifi
 | `channel_username` | string \| null | yes | `@handle` without the `@`, or `null` for private channels |
 | `channel_title` | string | yes | Display name from the channel info row |
 | `message_id` | int | yes | Telegram message ID; together with `channel_id` it is the idempotency key |
-| `text` | string \| null | yes | Message text; `null` if the message has only media |
-| `media_type` | string \| null | yes | `"photo"`, `"video"`, `"document"`, or `null` |
-| `media_url` | string \| null | yes | Cloudinary URL of the uploaded media; `null` if no media or upload failed |
-| `media_thumb_url` | string \| null | yes | Cloudinary thumbnail URL (videos only); `null` otherwise |
-| `media_width` | int \| null | no | Pixel width if photo/video, else `null` |
-| `media_height` | int \| null | no | Pixel height if photo/video, else `null` |
+| `text` | string \| null | yes | Message text; `null` for media-only messages (which still pass through if pre-filter and classifier find promo cues in the text — but text-only is the normal case) |
 | `classification` | object | yes | See below |
 | `raw` | object | yes | Full GramJS message object (bigints serialized as strings) |
 
@@ -143,11 +138,6 @@ Content-Type: application/json
   "channel_title": "Casino Promos",
   "message_id": 8721,
   "text": "🎁 Use code WELCOME200 for a 200% bonus on your first deposit!",
-  "media_type": "photo",
-  "media_url": "https://res.cloudinary.com/your-cloud/image/upload/v1717245296/promo-listener/casino_promos_8721.jpg",
-  "media_thumb_url": null,
-  "media_width": 1280,
-  "media_height": 720,
   "classification": {
     "partner_id": "stake",
     "timestamp": "2026-06-01T12:34:56Z",
@@ -331,7 +321,7 @@ X-API-Key: sk_live_xxxxx
 - Admin identity (who can run `/add` / `/edit` / `/delete`) is enforced by the Telegram bot inside `promo-listener` using a Telegram-user-ID whitelist. The backend just trusts whoever has the API key.
 - The listener never writes to your database directly — only via these endpoints.
 - The listener applies a cheap codebase pre-filter and OpenAI promo classification before calling `POST /api/messages`. The classifier result is included in every payload — store it.
-- Media is already hosted on Cloudinary by the time you receive the message. Just store the URL.
+- The listener does not host or forward media files. Only the text and classification fields are sent.
 - The `raw` field contains the entire GramJS message object as JSON (bigints serialized to strings). Store it (suggested column: `jsonb`) — useful for surfacing extra fields on the site later without re-running the listener.
 - Channels are added/edited/deleted via the admin endpoints (3-6). The listener polls `GET /api/channels` every ~3 min and joins/leaves Telegram channels automatically as the table changes.
 - Idempotency on `POST /api/messages` is mandatory. The listener's retry queue may re-POST the same `(channel_id, message_id)` after a transient failure.

@@ -27,7 +27,7 @@ async function main() {
   startFlusher(queue);
   await startAdminBot(queue);
 
-  const onMessage = buildHandler(client, queue);
+  const onMessage = buildHandler(queue);
   const manager = new ChannelManager(client, onMessage);
   await manager.start();
 
