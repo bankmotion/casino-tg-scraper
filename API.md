@@ -1,0 +1,311 @@
+# Backend API Contract — promo-listener
+
+This is the surface area the `promo-listener` service expects from the backend.
+
+- **2 listener-facing endpoints** — called by the MTProto pipeline
+- **4 admin endpoints** — called by the in-process Telegram admin bot when an admin runs `/add`, `/list`, `/edit`, `/delete`
+
+All 6 endpoints are called by the same service (`promo-listener`) and use the same auth: a single shared API key.
+
+---
+
+## Auth
+
+| Endpoint group | Header |
+|---|---|
+| Everything (`/api/*`) | `X-API-Key: <shared-secret>` |
+
+The key value is configured in the listener's `.env` as `BACKEND_API_KEY`. There is **no login flow** — admin identity is enforced by the Telegram bot (whitelisted user IDs), not at the HTTP layer.
+
+### ID types
+
+- `channel_id` is sent **as a string** in all listener payloads (Telegram channel IDs can exceed JavaScript's safe integer range). Backend should cast to `BIGINT` at the DB layer.
+- `message_id` is a normal integer (always within int32 range in practice).
+
+---
+
+# Listener-facing endpoints
+
+## 1. `GET /api/channels`
+
+Listener polls this every ~3 min to know which channels to watch.
+
+### Query params
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `active_only` | bool | no | If `true`, return only `is_active=true` channels. Defaults to `true`. |
+
+### Request
+
+```
+GET /api/channels?active_only=true
+X-API-Key: sk_live_xxxxx
+```
+
+### Response — `200 OK`
+
+```json
+[
+  {
+    "id": 1,
+    "username": "casino_promos",
+    "invite_link": null,
+    "title": "Casino Promos",
+    "is_active": true
+  },
+  {
+    "id": 2,
+    "username": null,
+    "invite_link": "https://t.me/+abc123xyz",
+    "title": "VIP Bonuses",
+    "is_active": true
+  }
+]
+```
+
+Either `username` or `invite_link` must be non-null. If both are set, `username` wins.
+
+### Errors
+
+- `401` — missing / invalid API key
+- `5xx` — listener retries with exponential backoff
+
+---
+
+## 2. `POST /api/messages`
+
+Listener pushes one classified promo per call, after pre-filter, OpenAI classification, and (if applicable) Cloudinary upload have all succeeded.
+
+### Request body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `channel_id` | string | yes | Telegram channel ID as a string (int64) |
+| `channel_username` | string \| null | yes | `@handle` without the `@`, or `null` for private channels |
+| `channel_title` | string | yes | Display name from the channel info row |
+| `message_id` | int | yes | Telegram message ID; together with `channel_id` it is the idempotency key |
+| `text` | string \| null | yes | Message text; `null` if the message has only media |
+| `media_type` | string \| null | yes | `"photo"`, `"video"`, `"document"`, or `null` |
+| `media_url` | string \| null | yes | Cloudinary URL of the uploaded media; `null` if no media or upload failed |
+| `media_thumb_url` | string \| null | yes | Cloudinary thumbnail URL (videos only); `null` otherwise |
+| `media_width` | int \| null | no | Pixel width if photo/video, else `null` |
+| `media_height` | int \| null | no | Pixel height if photo/video, else `null` |
+| `posted_at` | string (ISO-8601) | yes | Original post time from Telegram in UTC |
+| `classification` | object | yes | See below |
+| `raw` | object | yes | Full GramJS message object (bigints serialized as strings) |
+
+### `classification` object
+
+```json
+{
+  "is_promo": true,
+  "confidence": 0.94,
+  "code": "WELCOME200",
+  "summary": "200% deposit bonus, code WELCOME200"
+}
+```
+
+`code` and `summary` may be `null` if not extractable.
+
+### Request example
+
+```
+POST /api/messages
+X-API-Key: sk_live_xxxxx
+Content-Type: application/json
+```
+
+```json
+{
+  "channel_id": "1402934877",
+  "channel_username": "casino_promos",
+  "channel_title": "Casino Promos",
+  "message_id": 8721,
+  "text": "🎁 Use code WELCOME200 for a 200% bonus on your first deposit!",
+  "media_type": "photo",
+  "media_url": "https://res.cloudinary.com/your-cloud/image/upload/v1717245296/promo-listener/casino_promos_8721.jpg",
+  "media_thumb_url": null,
+  "media_width": 1280,
+  "media_height": 720,
+  "posted_at": "2026-06-01T12:34:56Z",
+  "classification": {
+    "is_promo": true,
+    "confidence": 0.94,
+    "code": "WELCOME200",
+    "summary": "200% deposit bonus, code WELCOME200"
+  },
+  "raw": { "...": "full message object" }
+}
+```
+
+### Responses
+
+| Status | Body | Meaning |
+|---|---|---|
+| `201 Created` | `{ "id": 5821, "status": "stored" }` | New row inserted |
+| `200 OK` | `{ "id": 5821, "status": "duplicate" }` | Idempotent: `(channel_id, message_id)` already existed; listener treats as success |
+
+### Errors
+
+| Status | Listener behavior |
+|---|---|
+| `400` | Listener logs and drops the payload (does **not** retry — payload is malformed) |
+| `401` | Listener pauses flushing and alerts via logs (bad API key) |
+| `5xx`, network error | Listener retries with exponential backoff (1 s → 60 s max) from its on-disk queue |
+
+**Idempotency requirement**: backend must treat `(channel_id, message_id)` as a unique key and silently absorb duplicates. The listener may legitimately re-POST the same payload after a network blip.
+
+---
+
+# Admin endpoints
+
+Called by the in-process Telegram admin bot. Same `X-API-Key` auth as the listener endpoints — no separate login or bearer token.
+
+## 3. `GET /api/admin/channels`
+
+List **all** channels (including inactive). Used by the bot's `/list` command.
+
+### Query params
+
+| Name | Type | Description |
+|---|---|---|
+| `q` | string | Optional search by `username` or `title` |
+| `is_active` | bool | Optional filter by active state |
+
+### Request
+
+```
+GET /api/admin/channels
+X-API-Key: sk_live_xxxxx
+```
+
+### Response — `200 OK`
+
+```json
+[
+  {
+    "id": 1,
+    "username": "casino_promos",
+    "invite_link": null,
+    "title": "Casino Promos",
+    "is_active": true,
+    "created_at": "2026-05-20T09:00:00Z",
+    "updated_at": "2026-05-28T14:22:11Z"
+  }
+]
+```
+
+---
+
+## 4. `POST /api/admin/channels`
+
+Add a new channel. Used by the bot's `/add` command.
+
+### Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `username` | string \| null | one of these two | `@handle` for public channels (without `@`) |
+| `invite_link` | string \| null | one of these two | `https://t.me/+...` for private channels |
+| `title` | string | yes | Display name |
+| `is_active` | bool | no | Defaults to `true` |
+
+### Request
+
+```
+POST /api/admin/channels
+X-API-Key: sk_live_xxxxx
+Content-Type: application/json
+```
+
+```json
+{
+  "username": "new_casino_channel",
+  "invite_link": null,
+  "title": "New Casino Channel",
+  "is_active": true
+}
+```
+
+### Response — `201 Created`
+
+Full channel object (same shape as `GET /api/admin/channels[]`).
+
+### Errors
+
+- `400` — validation (neither `username` nor `invite_link` provided)
+- `409` — duplicate channel (same `username` or `invite_link` already exists)
+
+---
+
+## 5. `PATCH /api/admin/channels/:id`
+
+Edit an existing channel. Any subset of fields may be supplied. Used by the bot's `/edit` command.
+
+### Body (all optional)
+
+```json
+{
+  "username": "updated_handle",
+  "invite_link": null,
+  "title": "Updated Title",
+  "is_active": false
+}
+```
+
+### Request
+
+```
+PATCH /api/admin/channels/7
+X-API-Key: sk_live_xxxxx
+```
+
+### Response — `200 OK`
+
+Full updated channel object.
+
+### Errors
+
+- `400` — validation
+- `404` — not found
+
+---
+
+## 6. `DELETE /api/admin/channels/:id`
+
+Remove a channel. Used by the bot's `/delete` command.
+
+### Query params
+
+| Name | Type | Description |
+|---|---|---|
+| `hard` | bool | If `true`, hard-delete the row. Defaults to `false` (soft-delete: sets `is_active=false`). |
+
+### Request
+
+```
+DELETE /api/admin/channels/7
+X-API-Key: sk_live_xxxxx
+```
+
+### Response — `204 No Content`
+
+### Errors
+
+- `404` — not found
+
+**Note**: prefer soft-delete by default so historical messages keep a valid `channel_id` reference. Hard delete only when a channel was added by mistake.
+
+---
+
+# Notes for the backend developer
+
+- All 6 endpoints use the same `X-API-Key` auth header. No bearer tokens, no login endpoint, no user accounts on the backend.
+- Admin identity (who can run `/add` / `/edit` / `/delete`) is enforced by the Telegram bot inside `promo-listener` using a Telegram-user-ID whitelist. The backend just trusts whoever has the API key.
+- The listener never writes to your database directly — only via these endpoints.
+- The listener applies a cheap codebase pre-filter and OpenAI promo classification before calling `POST /api/messages`. The classifier result is included in every payload — store it.
+- Media is already hosted on Cloudinary by the time you receive the message. Just store the URL.
+- The `raw` field contains the entire GramJS message object as JSON (bigints serialized to strings). Store it (suggested column: `jsonb`) — useful for surfacing extra fields on the site later without re-running the listener.
+- Channels are added/edited/deleted via the admin endpoints (3-6). The listener polls `GET /api/channels` every ~3 min and joins/leaves Telegram channels automatically as the table changes.
+- Idempotency on `POST /api/messages` is mandatory. The listener's retry queue may re-POST the same `(channel_id, message_id)` after a transient failure.

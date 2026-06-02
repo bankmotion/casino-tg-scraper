@@ -1,0 +1,31 @@
+{
+  "name": "promo-listener",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Telegram MTProto listener that classifies casino promos with OpenAI, uploads media to Cloudinary, and forwards to the backend API.",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "dev": "tsx src/index.ts",
+    "login": "tsx scripts/login.ts"
+  },
+  "dependencies": {
+    "cloudinary": "^2.5.1",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.30.0",
+    "input": "^1.0.1",
+    "openai": "^4.73.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "telegram": "^2.26.16"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
