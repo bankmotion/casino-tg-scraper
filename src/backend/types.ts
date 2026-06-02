@@ -1,5 +1,6 @@
 export interface ChannelDef {
   id: number;
+  partner_id: string;
   username: string | null;
   invite_link: string | null;
   title: string;
@@ -7,6 +8,7 @@ export interface ChannelDef {
 }
 
 export interface ChannelInput {
+  partner_id: string;
   username?: string | null;
   invite_link?: string | null;
   title: string;
@@ -14,6 +16,7 @@ export interface ChannelInput {
 }
 
 export interface ChannelPatch {
+  partner_id?: string;
   username?: string | null;
   invite_link?: string | null;
   title?: string;

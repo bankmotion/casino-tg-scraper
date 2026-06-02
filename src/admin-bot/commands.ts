@@ -13,8 +13,8 @@ import type { ChannelPatch } from "../backend/types.js";
 const HELP = `*Promo-listener admin commands*
 
 \`/list\` — show all channels with their IDs
-\`/add <username|invite_link> <title>\` — add a new channel
-\`/edit <id> <field> <value>\` — edit (fields: \`username\`, \`invite_link\`, \`title\`, \`is_active\`)
+\`/add <username|invite_link> <partner_id> <title>\` — add a new channel
+\`/edit <id> <field> <value>\` — edit (fields: \`username\`, \`invite_link\`, \`partner_id\`, \`title\`, \`is_active\`)
 \`/delete <id>\` — soft-delete (deactivate) a channel
 \`/delete <id> hard\` — hard-delete a channel
 \`/status\` — queue + activity health check
@@ -43,9 +43,12 @@ async function handleList(ctx: Context): Promise<void> {
     const lines = channels.map((c) => {
       const target = c.username ? `@${c.username}` : c.invite_link || "(none)";
       const flag = c.is_active ? "✅" : "⏸";
-      return `${flag} *${c.id}* — ${escapeMd(c.title)} (${escapeMd(target)})`;
+      return (
+        `${flag} *${c.id}* — ${escapeMd(c.title)}\n` +
+        `   partner: \`${c.partner_id}\`  •  ${escapeMd(target)}`
+      );
     });
-    await ctx.reply(lines.join("\n"), { parse_mode: "Markdown" });
+    await ctx.reply(lines.join("\n\n"), { parse_mode: "Markdown" });
   } catch (err) {
     await replyError(ctx, "list", err);
   }
@@ -54,24 +57,35 @@ async function handleList(ctx: Context): Promise<void> {
 // ---------- /add ----------
 async function handleAdd(ctx: Context): Promise<void> {
   const args = parseArgs(ctx.message?.text);
-  if (args.length < 2) {
-    await ctx.reply("Usage: `/add <username|invite_link> <title>`", {
-      parse_mode: "Markdown",
-    });
+  if (args.length < 3) {
+    await ctx.reply(
+      "Usage: `/add <username|invite_link> <partner_id> <title>`\n" +
+        "Example: `/add @casino_promos 42 Casino Promos`",
+      { parse_mode: "Markdown" }
+    );
     return;
   }
   const target = args[0];
-  const title = args.slice(1).join(" ");
+  const partnerId = args[1].trim();
+  const title = args.slice(2).join(" ");
+
+  if (!partnerId) {
+    await ctx.reply(
+      "Invalid `partner_id` — must be the casino's partner id from the backend.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
 
   const isInvite = /^https?:\/\//i.test(target) || target.includes("t.me/");
   const input = isInvite
-    ? { invite_link: target, title }
-    : { username: target.replace(/^@/, ""), title };
+    ? { invite_link: target, partner_id: partnerId, title }
+    : { username: target.replace(/^@/, ""), partner_id: partnerId, title };
 
   try {
     const created = await createChannel(input);
     await ctx.reply(
-      `Added: *${created.id}* — ${escapeMd(created.title)}\n` +
+      `Added: *${created.id}* — ${escapeMd(created.title)} (partner \`${created.partner_id}\`)\n` +
         `Listener will pick it up on next sync (≤ 3 min).`,
       { parse_mode: "Markdown" }
     );
@@ -85,7 +99,7 @@ async function handleEdit(ctx: Context): Promise<void> {
   const args = parseArgs(ctx.message?.text);
   if (args.length < 3) {
     await ctx.reply(
-      "Usage: `/edit <id> <field> <value>`\nFields: `username`, `invite_link`, `title`, `is_active`",
+      "Usage: `/edit <id> <field> <value>`\nFields: `username`, `invite_link`, `partner_id`, `title`, `is_active`",
       { parse_mode: "Markdown" }
     );
     return;
@@ -107,6 +121,17 @@ async function handleEdit(ctx: Context): Promise<void> {
     case "invite_link":
       patch.invite_link = value || null;
       break;
+    case "partner_id": {
+      const pid = value.trim();
+      if (!pid) {
+        await ctx.reply("`partner_id` must not be empty.", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+      patch.partner_id = pid;
+      break;
+    }
     case "title":
       patch.title = value;
       break;
@@ -115,7 +140,7 @@ async function handleEdit(ctx: Context): Promise<void> {
       break;
     default:
       await ctx.reply(
-        "Unknown field. Use one of: `username`, `invite_link`, `title`, `is_active`.",
+        "Unknown field. Use one of: `username`, `invite_link`, `partner_id`, `title`, `is_active`.",
         { parse_mode: "Markdown" }
       );
       return;
@@ -123,9 +148,10 @@ async function handleEdit(ctx: Context): Promise<void> {
 
   try {
     const updated = await updateChannel(id, patch);
-    await ctx.reply(`Updated *${updated.id}* — ${escapeMd(updated.title)}.`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(
+      `Updated *${updated.id}* — ${escapeMd(updated.title)} (partner \`${updated.partner_id}\`).`,
+      { parse_mode: "Markdown" }
+    );
   } catch (err) {
     await replyError(ctx, "edit", err);
   }
@@ -165,7 +191,7 @@ async function handleStatus(ctx: Context, queue: Queue): Promise<void> {
     const active = channels?.filter((c) => c.is_active).length ?? "?";
     const total = channels?.length ?? "?";
     const lastPromo = snap.lastPromoAt
-      ? `${ago(snap.lastPromoAt)} (${snap.lastPromoChannel})`
+      ? `${ago(snap.lastPromoAt)} ago (${snap.lastPromoChannel})`
       : "none since boot";
 
     const body =

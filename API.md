@@ -49,6 +49,7 @@ X-API-Key: sk_live_xxxxx
 [
   {
     "id": 1,
+    "partner_id": "stake",
     "username": "casino_promos",
     "invite_link": null,
     "title": "Casino Promos",
@@ -56,6 +57,7 @@ X-API-Key: sk_live_xxxxx
   },
   {
     "id": 2,
+    "partner_id": "shuffle",
     "username": null,
     "invite_link": "https://t.me/+abc123xyz",
     "title": "VIP Bonuses",
@@ -65,6 +67,8 @@ X-API-Key: sk_live_xxxxx
 ```
 
 Either `username` or `invite_link` must be non-null. If both are set, `username` wins.
+
+`partner_id` identifies which casino partner this channel represents (a key from the backend's `partners` / `casinos` table). The listener forwards it on every `POST /api/messages` so the backend can attribute the promo to the right casino without a lookup.
 
 ### Errors
 
@@ -84,6 +88,7 @@ Listener pushes one classified promo per call, after pre-filter, OpenAI classifi
 | `channel_id` | string | yes | Telegram channel ID as a string (int64) |
 | `channel_username` | string \| null | yes | `@handle` without the `@`, or `null` for private channels |
 | `channel_title` | string | yes | Display name from the channel info row |
+| `partner_id` | string | yes | Casino partner id (copied from the channel row — saves a join) |
 | `message_id` | int | yes | Telegram message ID; together with `channel_id` it is the idempotency key |
 | `text` | string \| null | yes | Message text; `null` if the message has only media |
 | `media_type` | string \| null | yes | `"photo"`, `"video"`, `"document"`, or `null` |
@@ -121,6 +126,7 @@ Content-Type: application/json
   "channel_id": "1402934877",
   "channel_username": "casino_promos",
   "channel_title": "Casino Promos",
+  "partner_id": "stake",
   "message_id": 8721,
   "text": "🎁 Use code WELCOME200 for a 200% bonus on your first deposit!",
   "media_type": "photo",
@@ -186,6 +192,7 @@ X-API-Key: sk_live_xxxxx
 [
   {
     "id": 1,
+    "partner_id": "stake",
     "username": "casino_promos",
     "invite_link": null,
     "title": "Casino Promos",
@@ -206,6 +213,7 @@ Add a new channel. Used by the bot's `/add` command.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `partner_id` | string | yes | Casino partner id (from backend's partners/casinos table) |
 | `username` | string \| null | one of these two | `@handle` for public channels (without `@`) |
 | `invite_link` | string \| null | one of these two | `https://t.me/+...` for private channels |
 | `title` | string | yes | Display name |
@@ -221,6 +229,7 @@ Content-Type: application/json
 
 ```json
 {
+  "partner_id": "stake",
   "username": "new_casino_channel",
   "invite_link": null,
   "title": "New Casino Channel",

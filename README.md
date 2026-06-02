@@ -47,8 +47,8 @@ You DM the bot from any of the whitelisted accounts:
 | Command | Purpose |
 |---|---|
 | `/list` | Show all channels with IDs |
-| `/add <username\|invite_link> <title>` | Add a new channel |
-| `/edit <id> <field> <value>` | Edit a channel (fields: `username`, `invite_link`, `title`, `is_active`) |
+| `/add <username\|invite_link> <partner_id> <title>` | Add a new channel (partner_id is the casino's partner id from the backend) |
+| `/edit <id> <field> <value>` | Edit a channel (fields: `username`, `invite_link`, `partner_id`, `title`, `is_active`) |
 | `/delete <id>` | Soft-delete (deactivate) a channel |
 | `/delete <id> hard` | Hard-delete a channel |
 | `/status` | Queue size, last promo, OpenAI calls today |
