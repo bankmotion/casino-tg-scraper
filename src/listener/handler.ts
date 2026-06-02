@@ -66,10 +66,10 @@ export function buildHandler(queue: Queue) {
       channel_id: entity.telegramId,
       channel_username: entity.def.username,
       channel_title: entity.def.title,
+      partner_id: entity.def.partner_id,
       message_id: msg.id,
       text,
       classification: {
-        partner_id: entity.def.partner_id,
         timestamp: new Date(msg.date * 1000).toISOString(),
         ...classification,
       },

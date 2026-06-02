@@ -325,3 +325,153 @@ X-API-Key: sk_live_xxxxx
 - The `raw` field contains the entire GramJS message object as JSON (bigints serialized to strings). Store it (suggested column: `jsonb`) — useful for surfacing extra fields on the site later without re-running the listener.
 - Channels are added/edited/deleted via the admin endpoints (3-6). The listener polls `GET /api/channels` every ~3 min and joins/leaves Telegram channels automatically as the table changes.
 - Idempotency on `POST /api/messages` is mandatory. The listener's retry queue may re-POST the same `(channel_id, message_id)` after a transient failure.
+
+---
+
+# Suggested Postgres schemas
+
+Two tables. The `partners` (casinos) table is assumed to exist as part of your own data model and is referenced by string `partner_id`.
+
+## `channels`
+
+The watchlist. Reads: `GET /api/channels` (listener) and `GET /api/admin/channels` (bot). Writes: `POST /api/admin/channels`, `PATCH /api/admin/channels/:id`, `DELETE /api/admin/channels/:id`.
+
+```sql
+CREATE TABLE channels (
+  id              BIGSERIAL    PRIMARY KEY,
+  partner_id      TEXT         NOT NULL,
+  username        TEXT,
+  invite_link     TEXT,
+  title           TEXT         NOT NULL,
+  is_active       BOOLEAN      NOT NULL DEFAULT true,
+  created_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+  -- Exactly one of username / invite_link must be set
+  CONSTRAINT channels_target_chk CHECK (
+    (username IS NOT NULL) OR (invite_link IS NOT NULL)
+  ),
+
+  -- A given Telegram channel can only be watched once
+  CONSTRAINT channels_username_uniq    UNIQUE (username),
+  CONSTRAINT channels_invite_link_uniq UNIQUE (invite_link)
+);
+
+CREATE INDEX channels_active_idx     ON channels (is_active) WHERE is_active = true;
+CREATE INDEX channels_partner_id_idx ON channels (partner_id);
+```
+
+Field mapping vs API:
+
+| Column | API field | Notes |
+|---|---|---|
+| `id` | `id` | Backend-generated; primary key |
+| `partner_id` | `partner_id` | Foreign key into your `partners` table — consider `REFERENCES partners(id)` if that table's PK is also `TEXT` |
+| `username` | `username` | `@handle` without the `@` |
+| `invite_link` | `invite_link` | `https://t.me/+...` |
+| `title` | `title` | Display name |
+| `is_active` | `is_active` | Soft-delete flag |
+| `created_at` / `updated_at` | returned on admin endpoints only | Maintain `updated_at` via trigger or app code on every PATCH |
+
+---
+
+## `messages`
+
+The captured promos. Reads: backend's `/api/feed` (or whatever powers the website). Writes: `POST /api/messages`.
+
+```sql
+CREATE TABLE messages (
+  id                BIGSERIAL     PRIMARY KEY,
+
+  -- Channel info (denormalized so feed queries don't need a join)
+  channel_id        BIGINT        NOT NULL,
+  channel_username  TEXT,
+  channel_title     TEXT          NOT NULL,
+  partner_id        TEXT          NOT NULL,
+
+  -- Telegram message
+  message_id        BIGINT        NOT NULL,
+  text              TEXT,
+  posted_at         TIMESTAMPTZ   NOT NULL,  -- == JSON classification.timestamp
+
+  -- OpenAI extraction
+  confidence        NUMERIC(3,2)  NOT NULL,
+  code              TEXT,
+  summary           TEXT,
+  value_usd         NUMERIC(12,2),
+  wager_req_usd     NUMERIC(12,2),
+  claims_count      INTEGER,
+
+  -- Full GramJS message (bigints serialized as strings) — keep for forward-compat
+  raw               JSONB,
+
+  -- Bookkeeping
+  received_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
+
+  -- Idempotency — listener may re-POST the same (channel_id, message_id) after retry
+  CONSTRAINT messages_telegram_uniq UNIQUE (channel_id, message_id)
+);
+
+CREATE INDEX messages_posted_at_idx     ON messages (posted_at DESC);
+CREATE INDEX messages_partner_idx       ON messages (partner_id, posted_at DESC);
+CREATE INDEX messages_code_idx          ON messages (code) WHERE code IS NOT NULL;
+```
+
+Field mapping vs API payload:
+
+| Column | API field | Notes |
+|---|---|---|
+| `id` | `id` (response only) | Backend-generated; returned in `POST /api/messages` response |
+| `channel_id` | `channel_id` | API sends as **string** to avoid JS bigint truncation — cast to `BIGINT` on insert |
+| `channel_username` | `channel_username` | Denormalized from `channels` for fast feed reads |
+| `channel_title` | `channel_title` | Denormalized |
+| `partner_id` | `classification.partner_id` | Listener-attached from channel row |
+| `message_id` | `message_id` | Telegram message ID |
+| `text` | `text` | Raw message text |
+| `posted_at` | `classification.timestamp` | Renamed in the DB because `timestamp` is a reserved word in SQL |
+| `confidence` | `classification.confidence` | 0..1; listener only posts if `>= 0.5` |
+| `code` | `classification.code` | Verbatim casing preserved |
+| `summary` | `classification.summary` | |
+| `value_usd` | `classification.value_usd` | USD only; null for crypto / other currencies |
+| `wager_req_usd` | `classification.wager_req_usd` | Same |
+| `claims_count` | `classification.claims_count` | Casino-reported, not site analytics |
+| `raw` | `raw` | `jsonb` |
+| `received_at` | — | Backend `DEFAULT now()` — when the row was inserted |
+
+### Idempotent INSERT pattern
+
+```sql
+INSERT INTO messages (
+  channel_id, channel_username, channel_title, partner_id,
+  message_id, text, posted_at,
+  confidence, code, summary, value_usd, wager_req_usd, claims_count,
+  raw
+) VALUES (
+  $1::BIGINT, $2, $3, $4,
+  $5, $6, $7,
+  $8, $9, $10, $11, $12, $13,
+  $14
+)
+ON CONFLICT (channel_id, message_id) DO NOTHING
+RETURNING id;
+```
+
+If the conflict path is hit, return `200 OK { "status": "duplicate" }`; otherwise `201 Created { "status": "stored" }`.
+
+### Derived column the website wants
+
+WagerSave-style "value per $1k wagered" is trivial:
+
+```sql
+SELECT
+  value_usd,
+  wager_req_usd,
+  CASE
+    WHEN wager_req_usd > 0
+      THEN ROUND(value_usd / (wager_req_usd / 1000.0), 2)
+    ELSE NULL
+  END AS value_per_1k
+FROM messages;
+```
+
+No need to store it.
