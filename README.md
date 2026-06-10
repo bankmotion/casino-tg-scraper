@@ -148,6 +148,58 @@ Dev mode (auto-reloads):
 npm run dev
 ```
 
+### 5a. Live feed channel (optional, but great for testing)
+
+Want every captured promo to appear in a Telegram channel as it's classified? Set up a live feed:
+
+1. **For a private DM stream** — set `FEED_TELEGRAM_CHAT_ID=<your_user_id>` in `.env`. The bot will DM you each promo.
+2. **For a public channel** —
+   - Create a Telegram channel.
+   - Add your bot as an admin with "Post Messages" permission.
+   - Forward any message from the channel to `@JsonDumpBot` to find the channel's ID (looks like `-1001234567890`).
+   - Set `FEED_TELEGRAM_CHAT_ID=-1001234567890` in `.env`.
+
+Leave blank to disable. Backend storage is unaffected either way — this is purely a UI mirror.
+
+Format of a published promo:
+
+```
+🎰 winna — @Winna
+
+🔑 Code: BL_CKJ_CK-05-m8k2
+📋 Winna Blackjack bonus code, $5 value
+
+💵 $5  •  🎯 wager $15K  •  📊 $0.33/1K  •  🔥 200 claims
+
+confidence 96%
+```
+
+### 5b. Testing without a real backend
+
+While the real backend is being built, run a tiny in-process mock instead.
+
+In one terminal:
+
+```
+npm run mock
+```
+
+This starts an HTTP server on port 3000 with:
+- one seeded channel (`@Winna`, partner_id `winna`)
+- the same `X-API-Key` your `.env` uses
+- working admin CRUD so the bot's `/add`, `/list`, `/edit`, `/delete` all work end-to-end
+- `POST /api/messages` payloads are logged to the console and appended to `data/mock-received.jsonl`
+
+In a second terminal:
+
+```
+npm run dev
+```
+
+The listener will fetch the seeded channel from the mock, join `@Winna` under your Telegram account, and every promo it classifies gets POSTed to the mock. Inspect `data/mock-received.jsonl` to see what would go to the real backend.
+
+Set `BACKEND_BASE_URL=http://localhost:3000` in `.env` (already the default). Switch it to the real backend URL once that's ready.
+
 Production:
 
 ```

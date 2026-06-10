@@ -14,7 +14,7 @@ const HELP = `*Promo-listener admin commands*
 
 \`/list\` — show all channels with their IDs
 \`/add <username|invite_link> <partner_id> <title>\` — add a new channel
-\`/edit <id> <field> <value>\` — edit (fields: \`username\`, \`invite_link\`, \`partner_id\`, \`title\`, \`is_active\`)
+\`/edit <id> <field> <value>\` — edit (fields: \`target\`, \`username\`, \`invite_link\`, \`partner_id\`, \`title\`, \`is_active\`)
 \`/delete <id>\` — soft-delete (deactivate) a channel
 \`/delete <id> hard\` — hard-delete a channel
 \`/status\` — queue + activity health check
@@ -77,10 +77,14 @@ async function handleAdd(ctx: Context): Promise<void> {
     return;
   }
 
-  const isInvite = /^https?:\/\//i.test(target) || target.includes("t.me/");
-  const input = isInvite
-    ? { invite_link: target, partner_id: partnerId, title }
-    : { username: target.replace(/^@/, ""), partner_id: partnerId, title };
+  const input = { ...parseChannelTarget(target), partner_id: partnerId, title };
+  if (!input.username && !input.invite_link) {
+    await ctx.reply(
+      "Couldn't parse the channel target. Use `@handle`, `handle`, `https://t.me/handle`, or a `https://t.me/+abc...` invite link.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
 
   try {
     const created = await createChannel(input);
@@ -115,12 +119,28 @@ async function handleEdit(ctx: Context): Promise<void> {
 
   const patch: ChannelPatch = {};
   switch (field) {
+    case "target":
     case "username":
-      patch.username = value.replace(/^@/, "") || null;
+    case "invite_link": {
+      // Clear: /edit <id> username null   (or empty)
+      if (!value || value.toLowerCase() === "null") {
+        patch[field === "target" ? "username" : (field as "username" | "invite_link")] = null;
+        break;
+      }
+      // Smart-parse regardless of which field name was used.
+      const parsed = parseChannelTarget(value);
+      if (parsed.username) {
+        patch.username = parsed.username;
+        patch.invite_link = null;
+      } else if (parsed.invite_link) {
+        patch.invite_link = parsed.invite_link;
+        patch.username = null;
+      } else {
+        await ctx.reply("Couldn't parse the value.");
+        return;
+      }
       break;
-    case "invite_link":
-      patch.invite_link = value || null;
-      break;
+    }
     case "partner_id": {
       const pid = value.trim();
       if (!pid) {
@@ -140,7 +160,7 @@ async function handleEdit(ctx: Context): Promise<void> {
       break;
     default:
       await ctx.reply(
-        "Unknown field. Use one of: `username`, `invite_link`, `partner_id`, `title`, `is_active`.",
+        "Unknown field. Use one of: `target` (smart), `username`, `invite_link`, `partner_id`, `title`, `is_active`.",
         { parse_mode: "Markdown" }
       );
       return;
@@ -209,6 +229,29 @@ async function handleStatus(ctx: Context, queue: Queue): Promise<void> {
 }
 
 // ---------- helpers ----------
+
+/**
+ * Resolve any of the forms users naturally type into either a public
+ * username or a private invite link:
+ *
+ *   "@winna"                            -> { username: "winna" }
+ *   "winna"                             -> { username: "winna" }
+ *   "t.me/winna"                        -> { username: "winna" }
+ *   "https://t.me/winna"                -> { username: "winna" }
+ *   "https://t.me/winna/8721"           -> { username: "winna" }  (message link)
+ *   "https://t.me/+abc123xyz"           -> { invite_link: "https://t.me/+abc123xyz" }
+ *   "https://t.me/joinchat/abc123"      -> { invite_link: ... }
+ */
+function parseChannelTarget(raw: string): { username?: string; invite_link?: string } {
+  const s = raw.trim();
+  if (/t\.me\/(?:\+|joinchat\/)/i.test(s)) {
+    return { invite_link: s.startsWith("http") ? s : `https://${s}` };
+  }
+  const m = s.match(/(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)/i);
+  if (m) return { username: m[1] };
+  return { username: s.replace(/^@/, "") };
+}
+
 function parseArgs(text: string | undefined): string[] {
   if (!text) return [];
   const parts = text.trim().split(/\s+/);

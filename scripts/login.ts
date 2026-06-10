@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+// @ts-expect-error -- "input" ships without TS types but works fine at runtime
 import input from "input";
 
 async function main() {

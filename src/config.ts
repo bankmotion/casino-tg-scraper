@@ -31,6 +31,14 @@ export const config = {
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0),
   },
+  feed: {
+    chatId: (() => {
+      const raw = process.env.FEED_TELEGRAM_CHAT_ID?.trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    })(),
+  },
   queue: {
     dir: optional("QUEUE_DIR", "./data/queue"),
   },

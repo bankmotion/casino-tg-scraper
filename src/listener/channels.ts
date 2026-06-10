@@ -95,25 +95,50 @@ export class ChannelManager {
       }
 
       if (def.invite_link) {
-        const m = def.invite_link.match(/(?:t\.me\/\+|joinchat\/)([\w-]+)/);
-        if (!m) {
-          logger.warn({ link: def.invite_link }, "Unrecognized invite link format");
-          return null;
-        }
-        try {
-          const result: any = await this.client.invoke(
-            new Api.messages.ImportChatInvite({ hash: m[1] })
-          );
-          const chat = result.chats?.[0];
-          return chat?.id?.toString() ?? null;
-        } catch (err: any) {
-          const msg = String(err?.message || "");
-          if (msg.includes("USER_ALREADY_PARTICIPANT")) {
-            const entity: any = await this.client.getEntity(def.invite_link);
-            return entity.id.toString();
+        // Real private invite link: t.me/+hash  or  t.me/joinchat/hash
+        const privateMatch = def.invite_link.match(/(?:t\.me\/\+|joinchat\/)([\w-]+)/);
+        if (privateMatch) {
+          try {
+            const result: any = await this.client.invoke(
+              new Api.messages.ImportChatInvite({ hash: privateMatch[1] })
+            );
+            const chat = result.chats?.[0];
+            return chat?.id?.toString() ?? null;
+          } catch (err: any) {
+            const msg = String(err?.message || "");
+            if (msg.includes("USER_ALREADY_PARTICIPANT")) {
+              const entity: any = await this.client.getEntity(def.invite_link);
+              return entity.id.toString();
+            }
+            throw err;
           }
-          throw err;
         }
+
+        // Fallback: a public t.me URL got stored in invite_link
+        // (e.g. https://t.me/somechannel). Treat it as a public channel.
+        const publicMatch = def.invite_link.match(/t\.me\/([A-Za-z0-9_]+)/i);
+        if (publicMatch) {
+          const handle = publicMatch[1];
+          logger.info(
+            { link: def.invite_link, handle },
+            "invite_link looks like a public t.me URL — joining as public channel"
+          );
+          const entity: any = await this.client.getEntity(handle);
+          try {
+            await this.client.invoke(
+              new Api.channels.JoinChannel({ channel: entity })
+            );
+          } catch (err: any) {
+            const m = String(err?.message || "");
+            if (!m.includes("ALREADY") && !m.includes("USER_ALREADY_PARTICIPANT")) {
+              logger.warn({ err: m, handle }, "JoinChannel warning");
+            }
+          }
+          return entity.id.toString();
+        }
+
+        logger.warn({ link: def.invite_link }, "Unrecognized invite link format");
+        return null;
       }
 
       logger.warn({ def }, "Channel has neither username nor invite_link");

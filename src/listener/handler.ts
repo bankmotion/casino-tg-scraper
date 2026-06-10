@@ -2,6 +2,7 @@ import type { NewMessageEvent } from "telegram/events/index.js";
 import type { Api } from "telegram";
 import { logger } from "../logger.js";
 import { stats } from "../stats.js";
+import { publish as publishFeed } from "../feed.js";
 import { Queue } from "../backend/queue.js";
 import { prefilter } from "./prefilter.js";
 import { classify } from "./classifier.js";
@@ -24,19 +25,25 @@ export function buildHandler(queue: Queue) {
   return async function onMessage(entity: ChannelEntity, event: NewMessageEvent) {
     const msg = event.message;
     const text = msg.message || null;
+    const channel = entity.def.username || entity.def.title;
+    const preview = text
+      ? text.replace(/\s+/g, " ").slice(0, 80) + (text.length > 80 ? "…" : "")
+      : "(no text / media only)";
+
+    logger.info({ channel, messageId: msg.id, preview }, "📥 Message received");
 
     // Stage 1: cheap codebase-side pre-filter
     const pre = prefilter(text);
     if (!pre.pass) {
-      logger.debug(
-        { channel: entity.def.username, messageId: msg.id },
-        "Dropped at pre-filter"
+      logger.info(
+        { channel, messageId: msg.id },
+        "🗑  Dropped at pre-filter (no promo cues)"
       );
       return;
     }
-    logger.debug(
-      { channel: entity.def.username, messageId: msg.id, reasons: pre.reasons },
-      "Passed pre-filter"
+    logger.info(
+      { channel, messageId: msg.id, reasons: pre.reasons },
+      "✓ Passed pre-filter, calling OpenAI"
     );
 
     // Stage 2: OpenAI promo classification
@@ -50,13 +57,13 @@ export function buildHandler(queue: Queue) {
     }
 
     if (classification.confidence < PROMO_CONFIDENCE_THRESHOLD) {
-      logger.debug(
+      logger.info(
         {
-          channel: entity.def.username,
+          channel,
           messageId: msg.id,
           confidence: classification.confidence,
         },
-        "Classified as non-promo — dropping"
+        "🗑  OpenAI says not a promo — dropping"
       );
       return;
     }
@@ -79,14 +86,17 @@ export function buildHandler(queue: Queue) {
     await queue.enqueue(payload, `${entity.def.id}_${msg.id}`);
     stats.recordPromo(entity.def.username || entity.def.title);
 
+    // Fire-and-forget live mirror to the feed channel (no-op if FEED_TELEGRAM_CHAT_ID is unset)
+    void publishFeed(payload);
+
     logger.info(
       {
-        channel: entity.def.username,
+        channel,
         messageId: msg.id,
         code: classification.code,
         confidence: classification.confidence,
       },
-      "Promo queued"
+      "🎁 Promo queued"
     );
   };
 }
