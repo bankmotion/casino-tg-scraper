@@ -32,11 +32,31 @@ export class ChannelManager {
 
   private registerGlobalHandler(): void {
     this.client.addEventHandler(async (event: NewMessageEvent) => {
-      const peer = event.message.peerId;
+      const peer: any = event.message.peerId;
+      const peerType = peer?.className || peer?.constructor?.name || "?";
+
+      logger.info(
+        {
+          peerType,
+          channelId: peer?.channelId?.toString?.(),
+          chatId: peer?.chatId?.toString?.(),
+          userId: peer?.userId?.toString?.(),
+          messageId: event.message.id,
+          watching: this.byTelegramId.size,
+        },
+        "🛰  [diag] NewMessage event"
+      );
+
       if (!(peer instanceof Api.PeerChannel)) return;
       const tgId = peer.channelId.toString();
       const entity = this.byTelegramId.get(tgId);
-      if (!entity) return;
+      if (!entity) {
+        logger.info(
+          { tgId, watching: Array.from(this.byTelegramId.keys()) },
+          "🛰  [diag] channel event from un-watched channel — ignoring"
+        );
+        return;
+      }
       try {
         await this.onMessage(entity, event);
       } catch (err) {

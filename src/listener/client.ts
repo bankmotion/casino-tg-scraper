@@ -30,5 +30,12 @@ export async function createClient(): Promise<TelegramClient> {
     "Telegram client connected"
   );
 
+  try {
+    const dialogs = await client.getDialogs({ limit: 100 });
+    logger.info({ dialogCount: dialogs.length }, "Primed update stream via getDialogs()");
+  } catch (err) {
+    logger.warn({ err }, "getDialogs() failed during update-stream prime (continuing)");
+  }
+
   return client;
 }
